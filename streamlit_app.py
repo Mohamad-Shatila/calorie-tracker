@@ -3,7 +3,6 @@ import pandas as pd
 import datetime
 import numpy as np
 from io import BytesIO
-import base64
 
 # Set page configuration
 st.set_page_config(
@@ -19,6 +18,27 @@ if 'bmr' not in st.session_state:
     st.session_state.bmr = None
 if 'weights' not in st.session_state:
     st.session_state.weights = pd.DataFrame(columns=['Date', 'Weight'])
+if 'exercises' not in st.session_state:  # New for exercise tracking
+    st.session_state.exercises = pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned'])
+
+# Common activities with MET values (Metabolic Equivalent of Task)
+ACTIVITY_DB = {
+    "Walking (slow)": 3.0,
+    "Walking (moderate)": 4.0,
+    "Walking (brisk)": 5.0,
+    "Running (5 mph)": 8.0,
+    "Running (6 mph)": 10.0,
+    "Running (7.5 mph)": 12.5,
+    "Cycling (leisure)": 6.0,
+    "Cycling (moderate)": 8.0,
+    "Swimming (moderate)": 8.0,
+    "Weight Training": 6.0,
+    "HIIT Workout": 9.0,
+    "Padel/Tennis": 7.0,
+    "Basketball": 8.0,
+    "Yoga": 3.0,
+    "Pilates": 4.0
+}
 
 # App title and description
 st.title("🍏 Calorie Tracker")
@@ -39,22 +59,31 @@ with st.sidebar:
     
     # Navigation
     st.header("Navigation")
-    page = st.radio("Go to", ["Add Meal", "View Progress", "Edit Data", "Export Data"])
+    page = st.radio("Go to", ["Add Meal", "Log Exercise", "View Progress", "Edit Data", "Export Data"])
     
     st.divider()
     
     # Quick stats
-    if not st.session_state.meals.empty:
+    if not st.session_state.meals.empty and st.session_state.bmr:
         today = datetime.date.today().isoformat()
+        
+        # Calculate today's calories from food
         today_calories = st.session_state.meals[
             st.session_state.meals['Date'] == today
         ]['Calories'].sum()
         
-        st.metric("Today's Calories", f"{today_calories:.0f}")
+        # Calculate today's calories burned from exercise
+        today_exercise_cals = st.session_state.exercises[
+            st.session_state.exercises['Date'] == today
+        ]['CaloriesBurned'].sum()
         
-        if st.session_state.bmr:
-            remaining = st.session_state.bmr - today_calories
-            st.metric("Remaining Calories", f"{remaining:.0f}")
+        # Calculate net calories
+        net_calories = today_calories - st.session_state.bmr - today_exercise_cals
+        
+        st.metric("Today's Calories", f"{today_calories:.0f}")
+        st.metric("Exercise Calories", f"{today_exercise_cals:.0f}")
+        st.metric("Net Balance", f"{net_calories:.0f}", 
+                 delta="Surplus" if net_calories > 0 else "Deficit")
 
 # Add Meal page
 if page == "Add Meal":
@@ -98,25 +127,47 @@ if page == "Add Meal":
                 
                 st.session_state.meals = pd.concat([st.session_state.meals, new_meal], ignore_index=True)
                 st.success(f"Added {meal_name} with {calories} calories!")
+
+# NEW: Log Exercise page
+elif page == "Log Exercise":
+    st.header("Log Exercise Activity")
+    
+    with st.form("exercise_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            ex_date = st.date_input("Date", value=datetime.date.today())
+            activity = st.selectbox("Activity", options=list(ACTIVITY_DB.keys()))
+            duration = st.number_input("Duration (minutes)", min_value=1, value=30)
+        
+        with col2:
+            if st.session_state.bmr:
+                # Calculate calories burned using MET formula: Calories = MET * weight * time * 3.5 / 200
+                # We need to estimate weight - using most recent weight if available
+                weight_est = 134.25  # Default to your provided weight
+                if not st.session_state.weights.empty:
+                    weight_est = st.session_state.weights.sort_values('Date').iloc[-1]['Weight']
                 
-                # Option to add weight
-                add_weight = st.checkbox("Add weight measurement for this date")
-                if add_weight:
-                    weight = st.number_input("Weight (kg)", min_value=0.0, step=0.1)
-                    if weight > 0:
-                        if meal_date.isoformat() in st.session_state.weights['Date'].values:
-                            st.session_state.weights.loc[
-                                st.session_state.weights['Date'] == meal_date.isoformat(), 'Weight'
-                            ] = weight
-                        else:
-                            new_weight = pd.DataFrame({
-                                'Date': [meal_date.isoformat()],
-                                'Weight': [weight]
-                            })
-                            st.session_state.weights = pd.concat(
-                                [st.session_state.weights, new_weight], ignore_index=True
-                            )
-                        st.success("Weight updated!")
+                met_value = ACTIVITY_DB[activity]
+                calories_burned = met_value * weight_est * (duration / 60) * 3.5 / 200
+                
+                st.metric("Estimated Calories Burned", f"{calories_burned:.0f}")
+            else:
+                st.info("Enter your BMR in settings to calculate calories burned")
+                calories_burned = 0
+        
+        submitted = st.form_submit_button("Log Exercise")
+        
+        if submitted:
+            new_exercise = pd.DataFrame({
+                'Date': [ex_date.isoformat()],
+                'Activity': [activity],
+                'Duration': [duration],
+                'CaloriesBurned': [calories_burned]
+            })
+            
+            st.session_state.exercises = pd.concat([st.session_state.exercises, new_exercise], ignore_index=True)
+            st.success(f"Logged {duration} minutes of {activity}!")
 
 # View Progress page
 elif page == "View Progress":
@@ -125,30 +176,27 @@ elif page == "View Progress":
     if st.session_state.meals.empty:
         st.info("No meals recorded yet. Add some meals to see your progress.")
     else:
-        # Daily calories chart
+        # Create combined data for analysis
         daily_calories = st.session_state.meals.groupby('Date')['Calories'].sum().reset_index()
         daily_calories['Date'] = pd.to_datetime(daily_calories['Date'])
         
-        st.subheader("Daily Calorie Intake")
-        st.line_chart(daily_calories, x='Date', y='Calories')
+        # Add exercise data if available
+        if not st.session_state.exercises.empty:
+            daily_exercise = st.session_state.exercises.groupby('Date')['CaloriesBurned'].sum().reset_index()
+            daily_exercise['Date'] = pd.to_datetime(daily_exercise['Date'])
+            daily_calories = daily_calories.merge(daily_exercise, on='Date', how='left')
+            daily_calories['CaloriesBurned'] = daily_calories['CaloriesBurned'].fillna(0)
+            daily_calories['NetCalories'] = daily_calories['Calories'] - daily_calories['CaloriesBurned']
+        else:
+            daily_calories['CaloriesBurned'] = 0
+            daily_calories['NetCalories'] = daily_calories['Calories']
         
-        # Macro breakdown
-        st.subheader("Macro Distribution")
-        daily_macros = st.session_state.meals.groupby('Date')[['Protein', 'Carbs', 'Fat']].sum().reset_index()
-        daily_macros['Date'] = pd.to_datetime(daily_macros['Date'])
+        st.subheader("Daily Calorie Intake vs Burned")
+        st.bar_chart(daily_calories, x='Date', y=['Calories', 'CaloriesBurned'])
         
-        tab1, tab2, tab3 = st.tabs(["Protein", "Carbs", "Fat"])
-        
-        with tab1:
-            st.area_chart(daily_macros, x='Date', y='Protein')
-        with tab2:
-            st.area_chart(daily_macros, x='Date', y='Carbs')
-        with tab3:
-            st.area_chart(daily_macros, x='Date', y='Fat')
-        
-        # Progress calculation
+        # Calculate theoretical weight loss with exercise
         if st.session_state.bmr and not st.session_state.weights.empty:
-            st.subheader("Weight Loss Analysis")
+            st.subheader("Weight Loss Analysis with Exercise")
             
             # Prepare weight data
             weight_data = st.session_state.weights.copy()
@@ -156,15 +204,15 @@ elif page == "View Progress":
             weight_data = weight_data.sort_values('Date')
             
             # Calculate theoretical weight loss
-            calorie_data = daily_calories.copy()
-            calorie_data = calorie_data.merge(weight_data, on='Date', how='outer').sort_values('Date')
-            calorie_data['BMR'] = st.session_state.bmr
-            calorie_data['CalorieDeficit'] = calorie_data['BMR'] - calorie_data['Calories']
-            calorie_data['CumulativeDeficit'] = calorie_data['CalorieDeficit'].cumsum()
-            calorie_data['TheoreticalLoss'] = calorie_data['CumulativeDeficit'] / 7700  # 7700 cal ≈ 1 kg
+            analysis_data = daily_calories.copy()
+            analysis_data = analysis_data.merge(weight_data, on='Date', how='outer').sort_values('Date')
+            analysis_data['BMR'] = st.session_state.bmr
+            analysis_data['CalorieDeficit'] = analysis_data['BMR'] - analysis_data['NetCalories']
+            analysis_data['CumulativeDeficit'] = analysis_data['CalorieDeficit'].cumsum()
+            analysis_data['TheoreticalLoss'] = analysis_data['CumulativeDeficit'] / 7700  # 7700 cal ≈ 1 kg
             
             # Display comparison
-            comparison_df = calorie_data[['Date', 'Weight', 'TheoreticalLoss']].dropna()
+            comparison_df = analysis_data[['Date', 'Weight', 'TheoreticalLoss']].dropna()
             if not comparison_df.empty:
                 comparison_df['ActualLoss'] = comparison_df['Weight'].iloc[0] - comparison_df['Weight']
                 
@@ -187,7 +235,7 @@ elif page == "Edit Data":
     st.header("Edit Your Data")
     
     edit_option = st.radio("What would you like to edit?", 
-                          ["Meal entries", "Weight entries"])
+                          ["Meal entries", "Weight entries", "Exercise entries"])
     
     if edit_option == "Meal entries":
         if st.session_state.meals.empty:
@@ -203,7 +251,7 @@ elif page == "Edit Data":
                 st.session_state.meals = edited_meals
                 st.success("Meals updated!")
     
-    else:  # Weight entries
+    elif edit_option == "Weight entries":
         if st.session_state.weights.empty:
             st.info("No weight entries to edit.")
         else:
@@ -241,6 +289,20 @@ elif page == "Edit Data":
                             [st.session_state.weights, new_entry], ignore_index=True
                         )
                     st.success("Weight entry added/updated!")
+    
+    else:  # Exercise entries
+        if st.session_state.exercises.empty:
+            st.info("No exercise entries to edit.")
+        else:
+            edited_exercises = st.data_editor(
+                st.session_state.exercises,
+                num_rows="dynamic",
+                use_container_width=True
+            )
+            
+            if st.button("Save Exercise Changes"):
+                st.session_state.exercises = edited_exercises
+                st.success("Exercises updated!")
 
 # Export Data page
 elif page == "Export Data":
@@ -254,6 +316,8 @@ elif page == "Export Data":
             df.to_excel(writer, index=False, sheet_name='Meals')
             if not st.session_state.weights.empty:
                 st.session_state.weights.to_excel(writer, index=False, sheet_name='Weights')
+            if not st.session_state.exercises.empty:
+                st.session_state.exercises.to_excel(writer, index=False, sheet_name='Exercises')
             settings_df = pd.DataFrame({
                 'Setting': ['BMR'],
                 'Value': [st.session_state.bmr]
@@ -276,9 +340,12 @@ elif page == "Export Data":
         
         if not st.session_state.weights.empty:
             st.dataframe(st.session_state.weights, use_container_width=True)
+            
+        if not st.session_state.exercises.empty:
+            st.dataframe(st.session_state.exercises, use_container_width=True)
     else:
         st.info("No data to export yet.")
 
 # Footer
 st.divider()
-st.caption("Calorie Tracker App - Track your nutrition and progress")
+st.caption("Calorie Tracker App - Track your nutrition, exercise, and progress")
