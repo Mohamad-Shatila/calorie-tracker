@@ -3,6 +3,8 @@ import pandas as pd
 import datetime
 import numpy as np
 from io import BytesIO
+import json
+import os
 
 # Set page configuration
 st.set_page_config(
@@ -11,15 +13,44 @@ st.set_page_config(
     layout="wide"
 )
 
-# Initialize session state variables
-if 'meals' not in st.session_state:
-    st.session_state.meals = pd.DataFrame(columns=['Date', 'Meal', 'Protein', 'Carbs', 'Fat', 'Calories'])
-if 'bmr' not in st.session_state:
-    st.session_state.bmr = None
-if 'weights' not in st.session_state:
-    st.session_state.weights = pd.DataFrame(columns=['Date', 'Weight'])
-if 'exercises' not in st.session_state:
-    st.session_state.exercises = pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned'])
+# Function to load data from file
+def load_data():
+    try:
+        if os.path.exists('calorie_tracker_data.json'):
+            with open('calorie_tracker_data.json', 'r') as f:
+                data = json.load(f)
+                
+            # Convert back to DataFrames
+            meals = pd.DataFrame(data['meals']) if data['meals'] else pd.DataFrame(columns=['Date', 'Meal', 'Protein', 'Carbs', 'Fat', 'Calories'])
+            weights = pd.DataFrame(data['weights']) if data['weights'] else pd.DataFrame(columns=['Date', 'Weight'])
+            exercises = pd.DataFrame(data['exercises']) if data['exercises'] else pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned'])
+            
+            return meals, weights, exercises, data['bmr']
+    except:
+        pass
+    
+    # Return empty data if file doesn't exist or error occurs
+    return (pd.DataFrame(columns=['Date', 'Meal', 'Protein', 'Carbs', 'Fat', 'Calories']),
+            pd.DataFrame(columns=['Date', 'Weight']),
+            pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned']),
+            None)
+
+# Function to save data to file
+def save_data(meals, weights, exercises, bmr):
+    data = {
+        'meals': meals.to_dict('records'),
+        'weights': weights.to_dict('records'),
+        'exercises': exercises.to_dict('records'),
+        'bmr': bmr
+    }
+    
+    with open('calorie_tracker_data.json', 'w') as f:
+        json.dump(data, f)
+
+# Load data at startup
+if 'initialized' not in st.session_state:
+    st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr = load_data()
+    st.session_state.initialized = True
 
 # More precise activity database with MET values
 ACTIVITY_DB = {
@@ -56,6 +87,7 @@ with st.sidebar:
     new_bmr = st.number_input("Your BMR (Calories)", min_value=0, value=current_bmr, step=10)
     if new_bmr != current_bmr:
         st.session_state.bmr = new_bmr
+        save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
         st.success("BMR updated!")
     
     st.divider()
@@ -129,6 +161,7 @@ if page == "Add Meal":
                 })
                 
                 st.session_state.meals = pd.concat([st.session_state.meals, new_meal], ignore_index=True)
+                save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
                 st.success(f"Added {meal_name} with {calories} calories!")
 
 # Log Exercise page
@@ -171,6 +204,7 @@ elif page == "Log Exercise":
             })
             
             st.session_state.exercises = pd.concat([st.session_state.exercises, new_exercise], ignore_index=True)
+            save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
             st.success(f"Logged {duration} minutes of {activity}!")
 
 # View Progress page
@@ -253,6 +287,7 @@ elif page == "Edit Data":
             
             if st.button("Save Meal Changes"):
                 st.session_state.meals = edited_meals
+                save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
                 st.success("Meals updated!")
     
     elif edit_option == "Weight entries":
@@ -267,6 +302,7 @@ elif page == "Edit Data":
             
             if st.button("Save Weight Changes"):
                 st.session_state.weights = edited_weights
+                save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
                 st.success("Weights updated!")
         
         # Add new weight entry
@@ -292,6 +328,7 @@ elif page == "Edit Data":
                         st.session_state.weights = pd.concat(
                             [st.session_state.weights, new_entry], ignore_index=True
                         )
+                    save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
                     st.success("Weight entry added/updated!")
     
     else:  # Exercise entries
@@ -306,6 +343,7 @@ elif page == "Edit Data":
             
             if st.button("Save Exercise Changes"):
                 st.session_state.exercises = edited_exercises
+                save_data(st.session_state.meals, st.session_state.weights, st.session_state.exercises, st.session_state.bmr)
                 st.success("Exercises updated!")
 
 # Export Data page
@@ -348,6 +386,18 @@ elif page == "Export Data":
             st.dataframe(st.session_state.exercises, use_container_width=True)
     else:
         st.info("No data to export yet.")
+
+# Add a button to clear all data (for testing)
+with st.sidebar:
+    st.divider()
+    if st.button("Clear All Data"):
+        st.session_state.meals = pd.DataFrame(columns=['Date', 'Meal', 'Protein', 'Carbs', 'Fat', 'Calories'])
+        st.session_state.weights = pd.DataFrame(columns=['Date', 'Weight'])
+        st.session_state.exercises = pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned'])
+        st.session_state.bmr = None
+        if os.path.exists('calorie_tracker_data.json'):
+            os.remove('calorie_tracker_data.json')
+        st.success("All data cleared!")
 
 # Footer
 st.divider()
