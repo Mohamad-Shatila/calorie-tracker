@@ -18,23 +18,26 @@ if 'bmr' not in st.session_state:
     st.session_state.bmr = None
 if 'weights' not in st.session_state:
     st.session_state.weights = pd.DataFrame(columns=['Date', 'Weight'])
-if 'exercises' not in st.session_state:  # New for exercise tracking
+if 'exercises' not in st.session_state:
     st.session_state.exercises = pd.DataFrame(columns=['Date', 'Activity', 'Duration', 'CaloriesBurned'])
 
-# Common activities with MET values (Metabolic Equivalent of Task)
+# More precise activity database with MET values
 ACTIVITY_DB = {
-    "Walking (slow)": 3.0,
-    "Walking (moderate)": 4.0,
-    "Walking (brisk)": 5.0,
-    "Running (5 mph)": 8.0,
-    "Running (6 mph)": 10.0,
-    "Running (7.5 mph)": 12.5,
-    "Cycling (leisure)": 6.0,
-    "Cycling (moderate)": 8.0,
-    "Swimming (moderate)": 8.0,
-    "Weight Training": 6.0,
+    "Walking (slow, 2 mph)": 2.5,
+    "Walking (moderate, 3 mph)": 3.5,
+    "Walking (brisk, 3.5 mph)": 4.0,
+    "Walking (very brisk, 4 mph)": 5.0,
+    "Running (5 mph/8 kmh)": 8.0,
+    "Running (6 mph/9.6 kmh)": 10.0,
+    "Running (7.5 mph/12 kmh)": 12.5,
+    "Cycling (leisure, <10 mph)": 6.0,
+    "Cycling (moderate, 12-14 mph)": 8.0,
+    "Swimming (moderate effort)": 8.0,
+    "Weight Training (moderate)": 5.0,
+    "Weight Training (vigorous)": 7.0,
     "HIIT Workout": 9.0,
-    "Padel/Tennis": 7.0,
+    "Padel/Tennis (doubles)": 6.0,
+    "Padel/Tennis (singles)": 8.0,
     "Basketball": 8.0,
     "Yoga": 3.0,
     "Pilates": 4.0
@@ -128,7 +131,7 @@ if page == "Add Meal":
                 st.session_state.meals = pd.concat([st.session_state.meals, new_meal], ignore_index=True)
                 st.success(f"Added {meal_name} with {calories} calories!")
 
-# NEW: Log Exercise page
+# Log Exercise page
 elif page == "Log Exercise":
     st.header("Log Exercise Activity")
     
@@ -142,14 +145,15 @@ elif page == "Log Exercise":
         
         with col2:
             if st.session_state.bmr:
-                # Calculate calories burned using MET formula: Calories = MET * weight * time * 3.5 / 200
-                # We need to estimate weight - using most recent weight if available
+                # Calculate calories burned using the correct formula: Calories = MET * weight_kg * time_hours
                 weight_est = 134.25  # Default to your provided weight
                 if not st.session_state.weights.empty:
+                    # Get the most recent weight entry
                     weight_est = st.session_state.weights.sort_values('Date').iloc[-1]['Weight']
                 
                 met_value = ACTIVITY_DB[activity]
-                calories_burned = met_value * weight_est * (duration / 60) * 3.5 / 200
+                hours = duration / 60  # Convert minutes to hours
+                calories_burned = met_value * weight_est * hours
                 
                 st.metric("Estimated Calories Burned", f"{calories_burned:.0f}")
             else:
@@ -309,7 +313,6 @@ elif page == "Export Data":
     st.header("Export Your Data")
     
     # Create Excel file in memory
-    @st.cache_data
     def convert_df_to_excel(df):
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
